@@ -6,8 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from aisearch.config import Config, SearchSpace, make_rng
-from aisearch.search import search
+from aisearch.search import build_evaluator, search
 
 ROOT = Path(__file__).resolve().parent.parent
 TASK = "meta-search"
@@ -67,6 +69,38 @@ def test_search_produces_only_valid_configs():
     # 探索全体でも例外なく完走する
     res = search(TASK, space, _stub_evaluator, generations=4, pop_size=6, seed=9)
     assert res.best_config.model in space.models
+
+
+def test_search_respects_max_evals_cap():
+    calls = {"n": 0}
+
+    def counting(cfg: Config) -> tuple[str, float]:
+        calls["n"] += 1
+        return "a", float(calls["n"])
+
+    r = search(TASK, SearchSpace(), counting, generations=5, pop_size=6, seed=0, max_evals=3)
+    assert calls["n"] <= 3  # コスト天井を超えて評価しない
+    assert r.best_config is not None  # best-so-far は返る
+
+
+def test_build_evaluator_fake_is_deterministic():
+    ev = build_evaluator("fake", "task")
+    a = ev(Config(model="m", council_size=2, max_iters=1))
+    b = ev(Config(model="m", council_size=2, max_iters=1))
+    assert a == b
+
+
+def test_build_evaluator_cli_runs_without_network():
+    # runner 注入で subprocess を使わず cli backend を決定的に検証
+    runner = lambda argv: '{"is_error": false, "result": "5", "usage": {"input_tokens": 1, "output_tokens": 1}}'
+    ev = build_evaluator("cli", "task", model="claude-haiku-4-5-20251001", runner=runner)
+    artifact, score = ev(Config(model="m", council_size=2, max_iters=1, judge_votes=1))
+    assert score == 5.0 and artifact == "5"
+
+
+def test_build_evaluator_unknown_raises():
+    with pytest.raises(ValueError):
+        build_evaluator("bogus", "task")
 
 
 def test_searchspace_evolves_valid_role_rosters():

@@ -13,9 +13,9 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .clients import FakeLLM, LLMClient
+from .clients import ClaudeCliClient, FakeLLM, LLMClient
 from .config import Config, SearchSpace, make_rng
-from .judge import FakeJudge, Judge
+from .judge import FakeJudge, Judge, LLMJudge
 from .refine import refine
 
 Evaluator = Callable[[Config], "tuple[str, float]"]
@@ -52,6 +52,7 @@ def search(
     pop_size: int = 6,
     seed: int = 0,
     elite: int = 2,
+    max_evals: int | None = None,
 ) -> SearchResult:
     """進化的メタ探索。
 
@@ -70,10 +71,13 @@ def search(
     # (2) エリートが世代をまたいでも同じスコアを保つ → noisy/実LLM evaluator でも
     #     母集団 best が単調非減少になる（基準 F3-2 を実装レベルで担保）。
     cache: dict[Config, tuple[str, float]] = {}
+    evals_done = 0  # 実評価(キャッシュミス)回数。max_evals のコスト天井に使う
 
     def _evaluate(cfg: Config) -> tuple[str, float]:
+        nonlocal evals_done
         if cfg not in cache:
             cache[cfg] = evaluator(cfg)
+            evals_done += 1
         return cache[cfg]
 
     best_config: Config | None = None
@@ -84,8 +88,13 @@ def search(
     for _gen in range(generations):
         scored: list[tuple[float, Config, str]] = []
         for cfg in population:
+            # コスト天井: 新規評価が上限に達したら既評価(キャッシュ)のみで続行
+            if max_evals is not None and cfg not in cache and evals_done >= max_evals:
+                continue
             artifact, score = _evaluate(cfg)
             scored.append((score, cfg, artifact))
+        if not scored:
+            break  # 天井で誰も評価できない → best-so-far を返して終了
         # 決定的ソート: スコア降順、同点は config の決定的キーで安定化
         scored.sort(key=lambda t: (-t[0], _config_key(t[1])))
 
@@ -131,25 +140,50 @@ def build_demo_evaluator(task: str) -> Evaluator:
     return make_refine_evaluator(task, client, judge)
 
 
+def build_evaluator(
+    backend: str, task: str, *, model: str = "claude-haiku-4-5-20251001", runner=None
+) -> Evaluator:
+    """探索の評価器をバックエンド別に構築。
+
+    - "fake": FakeLLM+FakeJudge（決定的・API不要）
+    - "cli" : ClaudeCliClient+LLMJudge（実 claude CLI / OAuth・課金あり）。
+              runner を注入すれば subprocess 無しで決定的にテストできる。
+    """
+    if backend == "fake":
+        return build_demo_evaluator(task)
+    if backend == "cli":
+        client = ClaudeCliClient(model=model, runner=runner)
+        judge = LLMJudge(client, votes=1)
+        return make_refine_evaluator(task, client, judge)
+    raise ValueError(f"unknown backend: {backend!r}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="aisearch.search")
-    parser.add_argument("--demo", action="store_true", help="FakeLLM+FakeJudge で決定的に実行")
+    parser.add_argument("--demo", action="store_true",
+                        help="FakeLLM+FakeJudge で決定的に実行（= --backend fake）")
+    parser.add_argument("--backend", choices=["fake", "cli"], default="fake",
+                        help="fake=決定的/無課金, cli=実 claude CLI(OAuth・課金あり)")
+    parser.add_argument("--model", default="claude-haiku-4-5-20251001",
+                        help="cli backend のモデル")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--generations", type=int, default=4)
     parser.add_argument("--pop-size", type=int, default=6)
+    parser.add_argument("--max-evals", type=int, default=None,
+                        help="実評価回数の上限（cli backend のコスト天井）")
     parser.add_argument("--task", type=str, default="Write a haiku about loops.")
     parser.add_argument("--out", type=str, default="best.json")
     args = parser.parse_args(argv)
 
-    if not args.demo:
+    backend = "fake" if args.demo else args.backend
+    if backend == "cli":
         print(
-            "CLI は --demo のみ対応（実バックエンドは API 経由で利用）。"
-            "決定的・API不要の探索は --demo で実行してください。",
+            f"[backend=cli / model={args.model}] 実 claude CLI を使用（OAuth・課金あり）。"
+            " 評価1回 ≈ council+refine の複数呼び出し。--max-evals でコスト天井を。",
             file=sys.stderr,
         )
-        return 2
 
-    evaluator = build_demo_evaluator(args.task)
+    evaluator = build_evaluator(backend, args.task, model=args.model)
     result = search(
         args.task,
         SearchSpace(),
@@ -157,9 +191,11 @@ def main(argv: list[str] | None = None) -> int:
         generations=args.generations,
         pop_size=args.pop_size,
         seed=args.seed,
+        max_evals=args.max_evals,
     )
     payload = {
         "task": args.task,
+        "backend": backend,
         "best_config": result.best_config.to_dict(),
         "best_artifact": result.best_artifact,
         "best_score": result.best_score,
@@ -168,7 +204,7 @@ def main(argv: list[str] | None = None) -> int:
     with open(args.out, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     print(
-        f"wrote {args.out}: best_score={result.best_score} "
+        f"wrote {args.out}: backend={backend} best_score={result.best_score} "
         f"model={result.best_config.model} council={result.best_config.council_size}"
     )
     return 0
