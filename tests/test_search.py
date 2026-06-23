@@ -171,6 +171,60 @@ def test_cli_tui_transport_strips_leaked_sentinel():
     assert data["result"].rstrip().endswith("---") or "🎯" not in data["result"]
 
 
+# --- 長時間走の堅牢化: eval 失敗で探索全体を殺さない ---------------------------
+def test_search_tolerates_transient_eval_failure_and_continues():
+    calls = {"n": 0}
+
+    def flaky(cfg: Config) -> tuple[str, float]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("transient TUI startup timeout")  # 初回だけ失敗
+        return ("art", float(calls["n"]))
+
+    # 既定 tolerate_eval_errors=True → 初回失敗をスキップし完走、有効な best を返す
+    r = search(TASK, SearchSpace(), flaky, generations=2, pop_size=4, seed=0)
+    assert r.best_config is not None
+    assert r.best_score > 0
+
+
+def test_search_raises_clear_error_when_all_evals_fail():
+    def always_fail(cfg: Config) -> tuple[str, float]:
+        raise RuntimeError("backend down")
+
+    with pytest.raises(RuntimeError, match="no successful evaluation"):
+        search(TASK, SearchSpace(), always_fail, generations=2, pop_size=3, seed=0)
+
+
+def test_search_propagates_when_tolerate_disabled():
+    def always_fail(cfg: Config) -> tuple[str, float]:
+        raise RuntimeError("boom")
+
+    # tolerate_eval_errors=False → 最初の失敗で即伝播（従来の即死挙動を選べる）
+    with pytest.raises(RuntimeError, match="boom"):
+        search(TASK, SearchSpace(), always_fail, generations=2, pop_size=3, seed=0,
+               tolerate_eval_errors=False)
+
+
+def test_tui_runner_passes_startup_timeout():
+    from aisearch.clients import make_tui_runner
+
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "3"
+        stderr = ""
+
+    def fake_run(cmd, to):
+        seen["cmd"] = cmd
+        return _Proc()
+
+    runner = make_tui_runner(script="/x/r.py", startup_timeout=120, subprocess_run=fake_run)
+    runner(["claude", "-p", "--model", "m", "prompt"])
+    assert "--startup-timeout" in seen["cmd"]
+    assert seen["cmd"][seen["cmd"].index("--startup-timeout") + 1] == "120"
+
+
 def test_searchspace_evolves_valid_role_rosters():
     space = SearchSpace()
     rng = make_rng(5)

@@ -53,11 +53,17 @@ def search(
     seed: int = 0,
     elite: int = 2,
     max_evals: int | None = None,
+    tolerate_eval_errors: bool = True,
 ) -> SearchResult:
     """進化的メタ探索。
 
     評価は Config 単位でキャッシュし、エリート保存により母集団 best は単調非減少
     （キャッシュにより noisy/実LLM evaluator でも成立する）。
+
+    tolerate_eval_errors=True（既定）: 個体評価が例外を上げても探索全体を殺さず、
+    その個体をスキップして続行する（実 LLM/TUI バックエンドの一過性失敗が長時間走を
+    巻き添えにするのを防ぐ）。失敗はキャッシュしないので後続世代で再試行余地が残る。
+    1 個も成功評価が無ければ最後に RuntimeError を上げる。
     """
     if pop_size < 1:
         raise ValueError("pop_size must be >= 1")
@@ -84,6 +90,7 @@ def search(
     best_artifact = ""
     best_score = float("-inf")
     history: list[float] = []
+    eval_failures = 0  # 例外でスキップした評価数（耐性モード）
 
     for _gen in range(generations):
         scored: list[tuple[float, Config, str]] = []
@@ -91,10 +98,23 @@ def search(
             # コスト天井: 新規評価が上限に達したら既評価(キャッシュ)のみで続行
             if max_evals is not None and cfg not in cache and evals_done >= max_evals:
                 continue
-            artifact, score = _evaluate(cfg)
+            try:
+                artifact, score = _evaluate(cfg)
+            except Exception as e:  # noqa: BLE001 - バックエンド由来の任意例外を許容
+                if not tolerate_eval_errors:
+                    raise
+                # 失敗個体はスキップ（best-so-far 保持・失敗はキャッシュしない＝再試行余地）
+                eval_failures += 1
+                print(
+                    f"[search] eval failed, skipping config (failures={eval_failures}): "
+                    f"{type(e).__name__}: {str(e)[:200]}",
+                    file=sys.stderr,
+                )
+                continue
             scored.append((score, cfg, artifact))
         if not scored:
-            break  # 天井で誰も評価できない → best-so-far を返して終了
+            # この世代は誰も評価できず（天井 or 全失敗）→ best-so-far で終了判断へ
+            break
         # 決定的ソート: スコア降順、同点は config の決定的キーで安定化
         scored.sort(key=lambda t: (-t[0], _config_key(t[1])))
 
@@ -115,7 +135,13 @@ def search(
             next_pop.append(child)
         population = next_pop
 
-    assert best_config is not None
+    if best_config is None:
+        # 1 個も成功評価が無い（全 eval が例外 or 天井で 0 評価）
+        raise RuntimeError(
+            f"search produced no successful evaluation "
+            f"(eval_failures={eval_failures}, evals_done={evals_done}); "
+            "全ての個体評価が失敗したか評価予算が 0 です"
+        )
     return SearchResult(
         best_config=best_config,
         best_artifact=best_artifact,
@@ -147,6 +173,7 @@ def build_evaluator(
     model: str = "claude-haiku-4-5-20251001",
     runner=None,
     transport: str = "direct",
+    startup_timeout: int = 90,
 ) -> Evaluator:
     """探索の評価器をバックエンド別に構築。
 
@@ -159,10 +186,10 @@ def build_evaluator(
     if backend == "fake":
         return build_demo_evaluator(task)
     if backend == "cli":
-        if runner is None and transport == "tui":
-            runner = make_tui_runner()
-        elif transport not in ("direct", "tui"):
+        if transport not in ("direct", "tui"):
             raise ValueError(f"unknown transport: {transport!r}")
+        if runner is None and transport == "tui":
+            runner = make_tui_runner(startup_timeout=startup_timeout)
         client = ClaudeCliClient(model=model, runner=runner)
         judge = LLMJudge(client, votes=1)
         return make_refine_evaluator(task, client, judge)
@@ -180,6 +207,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--cli-transport", choices=["direct", "tui"], default="direct",
                         help="cli backend の呼び出し経路: direct=claude -p(SDK枠) / "
                              "tui=claude-cli-run.py(対話TUI・サブスク枠でSDKクレジット非消費)")
+    parser.add_argument("--cli-startup-timeout", type=int, default=90,
+                        help="tui 経路の TUI 起動待ち上限秒(多数連続起動下の一過性失敗対策・既定90)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--generations", type=int, default=4)
     parser.add_argument("--pop-size", type=int, default=6)
@@ -201,7 +230,8 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     evaluator = build_evaluator(
-        backend, args.task, model=args.model, transport=args.cli_transport
+        backend, args.task, model=args.model, transport=args.cli_transport,
+        startup_timeout=args.cli_startup_timeout,
     )
     result = search(
         args.task,

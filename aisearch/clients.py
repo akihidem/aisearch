@@ -276,6 +276,7 @@ def make_tui_runner(
     script: str | None = None,
     cwd: str | None = None,
     timeout: int = 300,
+    startup_timeout: int = 90,
     subprocess_run: Callable[[list[str], int], object] | None = None,
 ) -> Callable[[list[str]], str]:
     """ClaudeCliClient 用 runner: `claude -p` の代わりに claude-cli-run.py(対話TUIラッパ)
@@ -317,7 +318,8 @@ def make_tui_runner(
             cmd += ["--model", model]
         if cwd:
             cmd += ["--cwd", cwd]
-        cmd += ["--timeout", str(timeout), prompt]
+        # --startup-timeout を上げて多数連続起動下の一過性 TUI 起動失敗を減らす。
+        cmd += ["--startup-timeout", str(startup_timeout), "--timeout", str(timeout), prompt]
         proc = _run(cmd, timeout + 60)
         if getattr(proc, "returncode", 1) != 0:
             err = (getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "")[:500]
