@@ -1,36 +1,16 @@
 # Project Context Snapshot
-<!-- Auto-updated by save-project-context.sh — 2026-06-23 18:10 -->
+<!-- Auto-updated by save-project-context.sh — 2026-06-24 02:50 -->
 <!-- セッション開始時はこのファイルを読むだけで OK。詳細は各ファイルを Read すること。 -->
 
 ## Remote
-- (no remote)
+- git@github.com:akihidem/aisearch.git
 
 ## Current Branch
 - master
 
 ## Recent Commits (last 10)
+- 7569e0b docs: add README (architecture, usage, deterministic-L0 design, dev methodology)
+- e37b4bd feat(council): 役割多様化 — Config.roles ロスターで proposer ごとに別役割を巡回割当
 - fed2153 Initial commit: aisearch — council generation × recursive self-improvement × meta-search
 
 ## Open PRs
-- (none)
-
-## Git Status
--  M aisearch/config.py
--  M aisearch/council.py
--  M aisearch/search.py
--  M tests/test_council.py
--  M tests/test_foundation.py
--  M tests/test_search.py
-- ?? .claude/
-
-## Top-level Structure
-- __pycache__
-- aisearch
-- conftest.py
-- pyproject.toml
-- pytest.ini
-- tests
-
-## Last Session Changes
-- (no new commits since last snapshot)
-

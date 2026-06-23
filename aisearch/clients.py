@@ -195,3 +195,77 @@ class MLXClient:
             completion_tokens=usage.get("completion_tokens", _count_tokens(text)),
             model=self.model,
         )
+
+
+class ClaudeCliClient:
+    """ローカルの `claude` CLI を headless(-p) で叩くアダプタ（OAuth 認証・APIキー不要）。
+
+    Claude Code のサブスク認証をそのまま使うので ANTHROPIC_API_KEY は不要。
+    `claude -p --output-format json --model <model> <prompt>` を実行し、JSON の
+    `result`(本文) と `usage`(tokens)、`total_cost_usd`(累計コスト) を取り出す。
+
+    - CLI に温度/seed のフラグは無いため temperature/seed は無視する。
+    - runner((argv) -> stdout) を注入すれば subprocess 無しで決定的にテストできる。
+    """
+
+    def __init__(
+        self,
+        model: str = "claude-opus-4-8",
+        *,
+        command: str = "claude",
+        timeout: int = 180,
+        extra_args: list[str] | None = None,
+        runner: Callable[[list[str]], str] | None = None,
+    ):
+        self.model = model
+        self._command = command
+        self._timeout = timeout
+        self._extra_args = list(extra_args or [])
+        self._runner = runner
+        self.total_cost_usd = 0.0  # 呼び出しごとに累積
+
+    def _build_args(self) -> list[str]:
+        return [
+            self._command,
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            self.model,
+            *self._extra_args,
+        ]
+
+    def _invoke(self, argv: list[str]) -> str:
+        if self._runner is not None:
+            return self._runner(argv)
+        import subprocess
+
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=self._timeout)
+        if proc.returncode != 0:
+            raise RuntimeError(
+                f"claude CLI failed (rc={proc.returncode}): {(proc.stderr or proc.stdout)[:300]}"
+            )
+        return proc.stdout
+
+    def complete(
+        self, prompt: str, *, temperature: float = 0.7, seed: int | None = None
+    ) -> LLMResponse:
+        import json as _json
+
+        argv = self._build_args() + [prompt]
+        raw = self._invoke(argv)
+        try:
+            data = _json.loads(raw)
+        except _json.JSONDecodeError as e:
+            raise RuntimeError(f"claude CLI returned non-JSON output: {raw[:200]!r}") from e
+        if data.get("is_error"):
+            raise RuntimeError(f"claude CLI error: {data.get('result') or data}")
+        text = (data.get("result") or "").strip()
+        self.total_cost_usd += float(data.get("total_cost_usd") or 0.0)
+        usage = data.get("usage", {})
+        return LLMResponse(
+            text=text,
+            prompt_tokens=usage.get("input_tokens", _count_tokens(prompt)),
+            completion_tokens=usage.get("output_tokens", _count_tokens(text)),
+            model=self.model,
+        )

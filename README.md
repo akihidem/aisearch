@@ -67,7 +67,10 @@ python -m aisearch.search --demo --seed 0 --out best.json
 ### 2. 実 LLM で探索
 
 ```python
-from aisearch import ClaudeClient, LLMJudge, SearchSpace, search, make_refine_evaluator
+from aisearch.clients import ClaudeClient
+from aisearch.judge import LLMJudge
+from aisearch.config import SearchSpace
+from aisearch.search import search, make_refine_evaluator
 
 task = "Write a short, vivid haiku about recursion."
 
@@ -85,7 +88,11 @@ print(result.best_artifact)
 ### 3. 個別の層を直接使う
 
 ```python
-from aisearch import Config, FakeLLM, FakeJudge, generate, refine
+from aisearch.config import Config
+from aisearch.clients import FakeLLM
+from aisearch.judge import FakeJudge
+from aisearch.council import generate
+from aisearch.refine import refine
 
 cfg = Config(model="claude-opus-4-8", council_size=3,
              roles=("generalist", "critic", "contrarian"), max_iters=3)

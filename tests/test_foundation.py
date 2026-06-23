@@ -7,6 +7,7 @@ import pytest
 
 from aisearch.clients import (
     ClaudeClient,
+    ClaudeCliClient,
     FakeLLM,
     LLMClient,
     LLMResponse,
@@ -51,7 +52,7 @@ def test_fakejudge_deterministic():
 
 
 # --- 基準2: 実アダプタが同一インターフェースを実装（契約検査・API非依存） ---
-@pytest.mark.parametrize("cls", [FakeLLM, ClaudeClient, OllamaClient, MLXClient])
+@pytest.mark.parametrize("cls", [FakeLLM, ClaudeClient, OllamaClient, MLXClient, ClaudeCliClient])
 def test_adapters_satisfy_llmclient_protocol(cls):
     obj = cls()  # 生成にネットワーク/SDK は不要
     assert isinstance(obj, LLMClient)
@@ -176,3 +177,33 @@ def test_l0_path_makes_no_network(monkeypatch):
     assert _g("t", cfg, _F()).artifact
     improver = _F(responder=lambda p, i: "IMPROVED " * (p.count("IMPROVED") + 1) + "x")
     assert _r("t", cfg, improver, _J()).best_artifact
+
+
+def test_claude_cli_client_builds_argv_and_parses_usage():
+    seen = {}
+
+    def fake_runner(argv):
+        seen["argv"] = argv
+        return '{"is_error": false, "result": "  hello  ", "total_cost_usd": 0.01, "usage": {"input_tokens": 12, "output_tokens": 3}}'
+
+    c = ClaudeCliClient(model="claude-opus-4-8", runner=fake_runner)
+    r = c.complete("say hi", temperature=0.0, seed=1)
+    assert r.text == "hello"  # JSON result を trim
+    assert (r.prompt_tokens, r.completion_tokens) == (12, 3)  # usage を反映
+    assert c.total_cost_usd == 0.01  # コスト累積
+    argv = seen["argv"]
+    assert argv[0] == "claude" and "-p" in argv
+    assert argv[argv.index("--model") + 1] == "claude-opus-4-8"
+    assert "json" in argv and argv[-1] == "say hi"  # prompt は末尾
+
+
+def test_claude_cli_client_raises_on_error_json():
+    c = ClaudeCliClient(runner=lambda argv: '{"is_error": true, "result": "boom"}')
+    with pytest.raises(RuntimeError):
+        c.complete("x")
+
+
+def test_claude_cli_client_raises_on_non_json():
+    c = ClaudeCliClient(runner=lambda argv: "not json at all")
+    with pytest.raises(RuntimeError):
+        c.complete("x")

@@ -13,6 +13,7 @@ import importlib
 _EXPORTS = {
     "LLMClient": "clients", "LLMResponse": "clients", "FakeLLM": "clients",
     "ClaudeClient": "clients", "OllamaClient": "clients", "MLXClient": "clients",
+    "ClaudeCliClient": "clients",
     "Judge": "judge", "Judgement": "judge", "FakeJudge": "judge", "LLMJudge": "judge",
     "Config": "config", "SearchSpace": "config", "CostTracker": "config",
     "make_rng": "config", "ConfigError": "config",
