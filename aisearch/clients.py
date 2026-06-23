@@ -290,11 +290,16 @@ def make_tui_runner(
     """
     import json as _json
     import os
+    import re
     from pathlib import Path
 
     runner_script = script or os.environ.get("CLAUDE_CLI_RUN") or str(
         Path.home() / ".claude" / "scripts" / "claude-cli-run.py"
     )
+    # claude-cli-run.py は完了検知に CCRUN_DONE_<hex> sentinel を使う。モデルが
+    # markdown 装飾付き(🎯 **CCRUN_DONE_..**)で書くとラッパの strip をすり抜けて
+    # 本文に漏れることがある → 防御的に除去（前後の装飾・空白ごと）。
+    _sentinel_re = re.compile(r"[`*🎯\s]*CCRUN_DONE_[0-9a-fA-F]+[`*\s]*")
 
     def _default_run(cmd: list[str], to: int):
         import subprocess
@@ -317,8 +322,7 @@ def make_tui_runner(
         if getattr(proc, "returncode", 1) != 0:
             err = (getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "")[:500]
             return _json.dumps({"is_error": True, "result": f"claude-cli-run failed: {err}"})
-        return _json.dumps(
-            {"is_error": False, "result": (proc.stdout or "").strip(), "usage": {}}
-        )
+        text = _sentinel_re.sub("", proc.stdout or "").strip()
+        return _json.dumps({"is_error": False, "result": text, "usage": {}})
 
     return runner

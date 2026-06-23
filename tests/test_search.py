@@ -152,6 +152,25 @@ def test_build_evaluator_unknown_transport_raises():
         build_evaluator("cli", "task", transport="carrier-pigeon")
 
 
+def test_cli_tui_transport_strips_leaked_sentinel():
+    # claude-cli-run.py の完了 sentinel が markdown 装飾付きで本文に漏れても除去する
+    from aisearch.clients import make_tui_runner
+
+    class _Proc:
+        returncode = 0
+        stdout = "Circuit repeats still\n\n---\n\n🎯 **CCRUN_DONE_39b48665**"
+        stderr = ""
+
+    runner = make_tui_runner(script="/x/run.py", subprocess_run=lambda cmd, to: _Proc())
+    raw = runner(["claude", "-p", "--model", "m", "prompt"])
+    import json
+
+    data = json.loads(raw)
+    assert "CCRUN_DONE" not in data["result"]
+    assert data["result"].startswith("Circuit repeats still")
+    assert data["result"].rstrip().endswith("---") or "🎯" not in data["result"]
+
+
 def test_searchspace_evolves_valid_role_rosters():
     space = SearchSpace()
     rng = make_rng(5)
