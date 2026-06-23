@@ -116,6 +116,54 @@ def test_searchspace_evolves_valid_role_rosters():
             assert cfg.role == cfg.roles[0]  # role はロスター先頭に整合
 
 
+# --- roster長×council_size 連動: 不変条件 C>=L（全 roster 役割が council で使われる） ---
+def test_roster_council_size_coupling_invariant_holds():
+    space = SearchSpace()
+    rng = make_rng(11)
+    for _ in range(500):
+        a = space.sample(rng)
+        b = space.sample(rng)
+        cross = space.crossover(a, b, rng)
+        mut = space.mutate(cross, rng)
+        for cfg in (a, b, cross, mut):
+            # 不変条件: roster の全役割が i%len 巡回で最低1回割り当たる
+            assert cfg.council_size >= len(cfg.roles), (
+                f"C<L 違反: council_size={cfg.council_size} roles={cfg.roles}"
+            )
+
+
+def test_mutate_council_size_gene_never_breaks_coupling():
+    # council_size 遺伝子を直接揺らしても roster 長を下回らない
+    space = SearchSpace()
+    rng = make_rng(7)
+    base = space.sample(rng)
+    for _ in range(500):
+        m = space.mutate(base, rng)
+        assert m.council_size >= len(m.roles)
+
+
+def test_coupling_repairs_when_no_council_size_ge_roster():
+    # council_sizes が全て roster 長未満になる病的空間でも不変条件を保つ
+    # （フォールバック=roster_len 自体を返し C>=L を最優先）
+    space = SearchSpace(roles=("a", "b", "c", "d"), council_sizes=(1, 2))
+    rng = make_rng(3)
+    for _ in range(500):
+        cfg = space.sample(rng)
+        assert cfg.council_size >= len(cfg.roles)
+        m = space.mutate(cfg, rng)
+        assert m.council_size >= len(m.roles)
+
+
+def test_coupling_backward_compat_single_role_config():
+    # roles=() の単一role Config に council_size 変異をかけても壊れない（L=0 無制約）
+    space = SearchSpace()
+    rng = make_rng(2)
+    single = Config(model="m", roles=(), council_size=3)
+    for _ in range(200):
+        m = space.mutate(single, rng)
+        assert m.council_size >= 1  # 単一role経路は従来通り valid
+
+
 # --- 基準4: CLI --demo が exit 0 で best.json を書き出す ---
 def test_cli_demo_writes_best_json(tmp_path):
     out = tmp_path / "best.json"
