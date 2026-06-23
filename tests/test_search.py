@@ -103,6 +103,55 @@ def test_build_evaluator_unknown_raises():
         build_evaluator("bogus", "task")
 
 
+def test_cli_tui_transport_calls_wrapper_and_wraps_text():
+    # claude-cli-run.py(TUIラッパ)経由の runner を tmux 無しで検証。
+    # ラッパは本文テキストのみ返す → JSON エンベロープに包まれ judge が採点できる。
+    from aisearch.clients import make_tui_runner
+
+    seen = {}
+
+    class _Proc:
+        returncode = 0
+        stdout = "5"
+        stderr = ""
+
+    def fake_run(cmd, to):
+        seen["cmd"] = cmd
+        seen["to"] = to
+        return _Proc()
+
+    runner = make_tui_runner(script="/x/claude-cli-run.py", subprocess_run=fake_run)
+    ev = build_evaluator(
+        "cli", "task", model="claude-haiku-4-5-20251001", runner=runner
+    )
+    artifact, score = ev(Config(model="m", council_size=1, max_iters=1, judge_votes=1))
+    assert score == 5.0 and artifact == "5"
+    # TUI ラッパが呼ばれ、`claude -p` 直叩きではない
+    assert seen["cmd"][0] == "/x/claude-cli-run.py"
+    assert "-p" not in seen["cmd"] and "--output-format" not in seen["cmd"]
+    assert "--model" in seen["cmd"] and "claude-haiku-4-5-20251001" in seen["cmd"]
+
+
+def test_cli_tui_transport_error_surfaces_as_is_error():
+    from aisearch.clients import make_tui_runner
+
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "tmux not found"
+
+    runner = make_tui_runner(script="/x/run.py", subprocess_run=lambda cmd, to: _Proc())
+    # is_error=True → ClaudeCliClient.complete が RuntimeError を上げる
+    ev = build_evaluator("cli", "task", runner=runner)
+    with pytest.raises(RuntimeError):
+        ev(Config(model="m", council_size=1, max_iters=1, judge_votes=1))
+
+
+def test_build_evaluator_unknown_transport_raises():
+    with pytest.raises(ValueError):
+        build_evaluator("cli", "task", transport="carrier-pigeon")
+
+
 def test_searchspace_evolves_valid_role_rosters():
     space = SearchSpace()
     rng = make_rng(5)

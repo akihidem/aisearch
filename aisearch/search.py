@@ -13,7 +13,7 @@ import sys
 from dataclasses import dataclass, field
 from typing import Callable
 
-from .clients import ClaudeCliClient, FakeLLM, LLMClient
+from .clients import ClaudeCliClient, FakeLLM, LLMClient, make_tui_runner
 from .config import Config, SearchSpace, make_rng
 from .judge import FakeJudge, Judge, LLMJudge
 from .refine import refine
@@ -141,17 +141,28 @@ def build_demo_evaluator(task: str) -> Evaluator:
 
 
 def build_evaluator(
-    backend: str, task: str, *, model: str = "claude-haiku-4-5-20251001", runner=None
+    backend: str,
+    task: str,
+    *,
+    model: str = "claude-haiku-4-5-20251001",
+    runner=None,
+    transport: str = "direct",
 ) -> Evaluator:
     """探索の評価器をバックエンド別に構築。
 
     - "fake": FakeLLM+FakeJudge（決定的・API不要）
     - "cli" : ClaudeCliClient+LLMJudge（実 claude CLI / OAuth・課金あり）。
               runner を注入すれば subprocess 無しで決定的にテストできる。
+              transport="tui" なら claude-cli-run.py(対話TUIラッパ)経由で呼び、
+              Agent SDK クレジット枠でなく通常サブスク枠から消費する（runner 明示時は優先）。
     """
     if backend == "fake":
         return build_demo_evaluator(task)
     if backend == "cli":
+        if runner is None and transport == "tui":
+            runner = make_tui_runner()
+        elif transport not in ("direct", "tui"):
+            raise ValueError(f"unknown transport: {transport!r}")
         client = ClaudeCliClient(model=model, runner=runner)
         judge = LLMJudge(client, votes=1)
         return make_refine_evaluator(task, client, judge)
@@ -166,6 +177,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="fake=決定的/無課金, cli=実 claude CLI(OAuth・課金あり)")
     parser.add_argument("--model", default="claude-haiku-4-5-20251001",
                         help="cli backend のモデル")
+    parser.add_argument("--cli-transport", choices=["direct", "tui"], default="direct",
+                        help="cli backend の呼び出し経路: direct=claude -p(SDK枠) / "
+                             "tui=claude-cli-run.py(対話TUI・サブスク枠でSDKクレジット非消費)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--generations", type=int, default=4)
     parser.add_argument("--pop-size", type=int, default=6)
@@ -177,13 +191,18 @@ def main(argv: list[str] | None = None) -> int:
 
     backend = "fake" if args.demo else args.backend
     if backend == "cli":
+        via = "対話TUIラッパ(SDKクレジット非消費)" if args.cli_transport == "tui" else "claude -p(SDK枠)"
         print(
-            f"[backend=cli / model={args.model}] 実 claude CLI を使用（OAuth・課金あり）。"
-            " 評価1回 ≈ council+refine の複数呼び出し。--max-evals でコスト天井を。",
+            f"[backend=cli / model={args.model} / transport={args.cli_transport}] "
+            f"実 claude CLI を {via} 経由で使用（OAuth）。"
+            " 評価1回 ≈ council+refine の複数呼び出し。--max-evals でコスト天井を。"
+            " tui は1呼び出し毎に tmux 起動のため direct より大幅に遅い。",
             file=sys.stderr,
         )
 
-    evaluator = build_evaluator(backend, args.task, model=args.model)
+    evaluator = build_evaluator(
+        backend, args.task, model=args.model, transport=args.cli_transport
+    )
     result = search(
         args.task,
         SearchSpace(),

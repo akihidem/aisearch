@@ -269,3 +269,56 @@ class ClaudeCliClient:
             completion_tokens=usage.get("output_tokens", _count_tokens(text)),
             model=self.model,
         )
+
+
+def make_tui_runner(
+    *,
+    script: str | None = None,
+    cwd: str | None = None,
+    timeout: int = 300,
+    subprocess_run: Callable[[list[str], int], object] | None = None,
+) -> Callable[[list[str]], str]:
+    """ClaudeCliClient 用 runner: `claude -p` の代わりに claude-cli-run.py(対話TUIラッパ)
+    を呼び、その plain-text 応答を ClaudeCliClient が期待する JSON エンベロープに包む。
+
+    対話TUI(entrypoint=cli)経由なので Agent SDK クレジット枠を食わず通常のサブスク枠から
+    消費される（理由は ~/.claude/scripts/claude-cli-run.py の docstring / memory 参照）。
+    TUI ラッパは本文テキストのみ返すため usage/cost は空。`-p`/`--output-format json` は
+    使わず、ラッパ独自の `--model/--cwd/--timeout` を渡す。
+
+    subprocess_run((cmd, timeout) -> proc) を注入すれば tmux 無しで決定的にテストできる。
+    """
+    import json as _json
+    import os
+    from pathlib import Path
+
+    runner_script = script or os.environ.get("CLAUDE_CLI_RUN") or str(
+        Path.home() / ".claude" / "scripts" / "claude-cli-run.py"
+    )
+
+    def _default_run(cmd: list[str], to: int):
+        import subprocess
+
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=to)
+
+    _run = subprocess_run or _default_run
+
+    def runner(argv: list[str]) -> str:
+        # argv = ["claude","-p","--output-format","json","--model",M, ..., prompt]
+        model = argv[argv.index("--model") + 1] if "--model" in argv else None
+        prompt = argv[-1]
+        cmd = [runner_script]
+        if model:
+            cmd += ["--model", model]
+        if cwd:
+            cmd += ["--cwd", cwd]
+        cmd += ["--timeout", str(timeout), prompt]
+        proc = _run(cmd, timeout + 60)
+        if getattr(proc, "returncode", 1) != 0:
+            err = (getattr(proc, "stderr", "") or getattr(proc, "stdout", "") or "")[:500]
+            return _json.dumps({"is_error": True, "result": f"claude-cli-run failed: {err}"})
+        return _json.dumps(
+            {"is_error": False, "result": (proc.stdout or "").strip(), "usage": {}}
+        )
+
+    return runner
