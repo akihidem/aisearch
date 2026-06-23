@@ -1,6 +1,8 @@
 """F1 council: 合議生成 propose→critique→aggregate の決定的テスト。"""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from aisearch.clients import FakeLLM
@@ -78,3 +80,37 @@ def test_council_threads_distinct_seeds_per_candidate():
     cfg = Config(model="fake", council_size=3, budget=10_000_000, seed=100)
     generate(TASK, cfg, SeedSpy())
     assert {100, 101, 102} <= set(seen)  # propose#0..2 に異なる seed
+
+
+def _role_of(prompt: str) -> str:
+    return re.search(r"role=([^\]]+)\]", prompt).group(1)
+
+
+def test_council_assigns_distinct_roles_per_proposer():
+    cfg = Config(
+        model="fake",
+        council_size=3,
+        roles=("generalist", "critic", "contrarian"),
+        budget=10_000_000,
+    )
+    client = FakeLLM()
+    generate(TASK, cfg, client)
+    roles = [_role_of(p) for p in client.calls if p.startswith("[propose")]
+    assert roles == ["generalist", "critic", "contrarian"]
+    assert len(set(roles)) == 3  # 真に多様（全員別役割）
+
+
+def test_council_roles_cycle_when_fewer_than_council_size():
+    cfg = Config(model="fake", council_size=4, roles=("a", "b"), budget=10_000_000)
+    client = FakeLLM()
+    generate(TASK, cfg, client)
+    roles = [_role_of(p) for p in client.calls if p.startswith("[propose")]
+    assert roles == ["a", "b", "a", "b"]  # 巡回割当
+
+
+def test_council_falls_back_to_single_role_when_roles_empty():
+    cfg = Config(model="fake", council_size=2, role="solo", budget=10_000_000)  # roles 未指定
+    client = FakeLLM()
+    generate(TASK, cfg, client)
+    roles = [_role_of(p) for p in client.calls if p.startswith("[propose")]
+    assert roles == ["solo", "solo"]  # 後方互換

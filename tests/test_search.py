@@ -69,6 +69,19 @@ def test_search_produces_only_valid_configs():
     assert res.best_config.model in space.models
 
 
+def test_searchspace_evolves_valid_role_rosters():
+    space = SearchSpace()
+    rng = make_rng(5)
+    for _ in range(300):
+        a = space.sample(rng)
+        b = space.sample(rng)
+        child = space.mutate(space.crossover(a, b, rng), rng)
+        for cfg in (a, b, child):
+            assert cfg.roles  # ロスターは常に非空
+            assert all(r in space.roles for r in cfg.roles)  # 既知役割のみ
+            assert cfg.role == cfg.roles[0]  # role はロスター先頭に整合
+
+
 # --- 基準4: CLI --demo が exit 0 で best.json を書き出す ---
 def test_cli_demo_writes_best_json(tmp_path):
     out = tmp_path / "best.json"
@@ -84,6 +97,7 @@ def test_cli_demo_writes_best_json(tmp_path):
     for key in ("task", "best_config", "best_artifact", "best_score", "score_history"):
         assert key in data
     assert data["best_config"]["model"]
+    assert data["best_config"]["roles"]  # 役割ロスターが探索結果に含まれる
     assert data["best_artifact"]  # 非空の成果物
     assert isinstance(data["best_score"], (int, float))
     assert isinstance(data["score_history"], list) and len(data["score_history"]) > 0

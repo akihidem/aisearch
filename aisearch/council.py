@@ -36,6 +36,13 @@ def _aggregate_prompt(task: str, pairs: list[tuple[str, str]]) -> str:
     return f"[aggregate] Merge the best ideas into one final answer.\nTASK:\n{task}\n{joined}"
 
 
+def _role_for(config: Config, i: int) -> str:
+    """proposer i の役割。roles 指定時はそれを巡回割当、無指定なら単一 role。"""
+    if config.roles:
+        return config.roles[i % len(config.roles)]
+    return config.role
+
+
 def generate(task: str, config: Config, client: LLMClient) -> CouncilResult:
     """合議生成。client を注入（テストは FakeLLM）。
 
@@ -52,7 +59,7 @@ def generate(task: str, config: Config, client: LLMClient) -> CouncilResult:
         if cost.exceeded():
             log.append(f"budget-exceeded:propose#{i}")
             break
-        prompt = _propose_prompt(task, config.role, i)
+        prompt = _propose_prompt(task, _role_for(config, i), i)
         try:
             resp = client.complete(prompt, temperature=config.temperature, seed=config.seed + i)
         except Exception as e:  # noqa: BLE001 個別候補の障害は許容

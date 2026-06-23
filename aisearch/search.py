@@ -40,7 +40,7 @@ def make_refine_evaluator(task: str, client: LLMClient, judge: Judge) -> Evaluat
 
 
 def _config_key(cfg: Config) -> tuple:
-    return (cfg.model, cfg.temperature, cfg.role, cfg.council_size, cfg.seed)
+    return (cfg.model, cfg.temperature, cfg.role, cfg.roles, cfg.council_size, cfg.seed)
 
 
 def search(

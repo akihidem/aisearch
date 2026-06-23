@@ -75,6 +75,18 @@ def test_config_valid_and_to_dict():
     assert d["model"] == "m" and d["council_size"] == 2
 
 
+def test_config_roles_coerced_to_tuple_and_in_dict():
+    c = Config(model="m", roles=["a", "b"])  # list でも tuple 化される
+    assert c.roles == ("a", "b")
+    assert c.to_dict()["roles"] == ["a", "b"]
+    hash(c)  # frozen/hashable（search の評価キャッシュキーに使える）
+
+
+def test_config_rejects_empty_role_in_roles():
+    with pytest.raises(ConfigError):
+        Config(model="m", roles=("ok", ""))
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
