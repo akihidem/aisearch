@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# pytest / tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# venvs
+.venv/
+venv/
+
+# 探索の生成物（デモ出力）
+best.json
+
+# OS
+.DS_Store

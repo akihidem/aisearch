@@ -1,0 +1,14 @@
+[project]
+name = "aisearch"
+version = "0.1.0"
+description = "Council generation × recursive self-improvement × meta-search over AI model/config"
+requires-python = ">=3.10"
+# 実バックエンドを使う場合のみ: pip install anthropic （L0 では不要）
+optional-dependencies = { llm = ["anthropic>=0.40"] }
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["aisearch"]
